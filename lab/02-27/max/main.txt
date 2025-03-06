@@ -1,0 +1,28 @@
+
+main.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <main>:
+   0:	55                   	push   %rbp									 # inizio prologo, push di %rbp
+   1:	48 89 e5             	mov    %rsp,%rbp						 # la cima della pila è la base del nuovo frame 
+   4:	48 83 ec 10          	sub    $0x10,%rsp						 # riserva 16 byte per il frame corrente
+   8:	c7 45 f8 02 00 00 00 	movl   $0x2,-0x8(%rbp)			 # 2 va 8 byte più giù
+   f:	c7 45 fc 03 00 00 00 	movl   $0x3,-0x4(%rbp)			 # 3 va 4 byte più giù, per 4 byte ciascuno (32 bit) va bene
+  16:	8b 55 fc             	mov    -0x4(%rbp),%edx			 # metti 3 e 2 in %edx e %eax 
+  19:	8b 45 f8             	mov    -0x8(%rbp),%eax
+  1c:	89 d6                	mov    %edx,%esi						 # la convenzione di chiamata è %rdi, %rsi, quindi metti %edx in %esi
+  1e:	89 c7                	mov    %eax,%edi						 # metti %eax in %edi. NOTA: i 32 bit più alti di %esi e %edi vengono annullati automaticamente
+  20:	e8 00 00 00 00       	call   25 <main+0x25>				 # chiamiamo una qualche funzione ad ora sconosciuta
+  25:	89 c1                	mov    %eax,%ecx						 # da qui in poi prepara la print e chiama
+  27:	8b 55 fc             	mov    -0x4(%rbp),%edx
+  2a:	8b 45 f8             	mov    -0x8(%rbp),%eax
+  2d:	89 c6                	mov    %eax,%esi
+  2f:	48 8d 05 00 00 00 00 	lea    0x0(%rip),%rax        # 36 <main+0x36>
+  36:	48 89 c7             	mov    %rax,%rdi
+  39:	b8 00 00 00 00       	mov    $0x0,%eax
+  3e:	e8 00 00 00 00       	call   43 <main+0x43>
+  43:	b8 00 00 00 00       	mov    $0x0,%eax
+  48:	c9                   	leave
+  49:	c3                   	ret

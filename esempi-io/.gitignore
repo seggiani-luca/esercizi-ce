@@ -1,0 +1,11 @@
+setenv
+*.o
+a.out
+*.bin
+tags
+serial.txt
+.gdb_history
+*/boot/*
+*/debug/*
+interrupt-1/*/boot/*
+interrupt-1/*/debug/*
