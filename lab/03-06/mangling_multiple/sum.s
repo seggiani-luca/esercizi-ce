@@ -12,8 +12,9 @@ _Z3sumP2stS_S_:
 	pushq %rbp
 	movq %rsp, %rbp
 	
-	push %rax
-	push %rbx
+	# doesn't matter, caller save registers
+	# push %rax
+	# push %rbx
 
 	# init 16 bytes for structures 
 	# we'll read pointed structure straight from memory
@@ -38,8 +39,8 @@ _Z3sumP2stS_S_:
 	mov %eax, st_a(%rdi)
 	mov %ebx, st_b(%rdi)
 
-	pop %rbx
-	pop %rax
+	# pop %rbx
+	# pop %rax
 	
 	leave
 	ret
