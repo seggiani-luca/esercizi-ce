@@ -1,0 +1,61 @@
+# tipi built-in:
+
+v => void
+w => wchar_t
+b => bool
+c => char
+a => signed char
+h => unsigned char
+s => short
+t => unsigned short
+i => int
+j => unsigned int
+l => long
+m => unsigned long
+f => float
+d => double
+
+# tipi utente:
+
+<N><NOME>
+
+Dove N è il numero di caratteri di <NOME> e <NOME> è il nome del tipo ad esempio
+
+5Punto
+2st
+9struttura
+4elem
+
+# Tipi composti:
+
+P => puntatore
+K => const
+R => riferimento
+
+somma(punto*) = _Z5sommaP5punto
+
+# Nomi ripetuti
+
+se un tipo utente viene riferito più volte (ad esmepio somma(st, st)) anzichè riscriverlo si usa:
+
+S_  => per riferisi al primo tipo utente incontrato nella stringa
+S0_ => per riferisi al secondo
+S1_ => al terzo e così via
+
+somma(st, st) => _Z5somma2stS_
+somma(punto, punto, st, st*, punto*)  => _Z5somma5puntoS_2stPS0_PS_
+
+# Classi
+
+_ZN<M><NOME_CLASSE>[UGUALE A SOPRA MA IL PRIMO PARAMETRO È SEMPRE "E"]
+
+Il costrutture è "C1"
+il distrutture è "D1"
+
+Nelle classi è _ZN "N" sta per "nested" quindi _ZN<M><NOME_CLASS><N><NOME_FUZIONE>E<parametri>
+
+# c++filt
+
+c++filt <mangled> => human readable
+
+
