@@ -1,7 +1,7 @@
 #include <libce.h>
 
 char saved_byte;
-char* addr;
+char* addr; // bruttino in verita'
 
 void foo(){
     printf("Ciao sono la funzione foo\n");

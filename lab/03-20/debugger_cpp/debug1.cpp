@@ -38,6 +38,6 @@ extern "C" void main(){
     gate_init(3, a_debug);
     add_breakpoint(foo);
     foo();
-    // foo();
+    foo();
     pause();
 }
