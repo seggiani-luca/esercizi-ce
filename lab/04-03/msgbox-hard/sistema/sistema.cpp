@@ -24,7 +24,7 @@ const natl DUMMY_PRIORITY = 0;
 struct des_proc {
 	/// identificatore numerico del processo
 	natw id;
-	/// livello di privilegio (LIV_UTENTE o LIV_SISTEMA)
+/// livello di privilegio (LIV_UTENTE o LIV_SISTEMA)
 	natw livello;
 	/// precedenza nelle code dei processi
 	natl precedenza;
@@ -1833,48 +1833,145 @@ void process_dump(des_proc* p, log_sev sev)
 /// @}
 /// @}
 
-// aggiunte da me
-natq lavagna;
-bool lavagna_piena = false;
-des_proc* processi_sospesi = nullptr;
+// funzionalita' msgbox
 
-extern "C" void c_leggi() {
-	flog(LOG_INFO, "c_leggi");
-	
-	if(lavagna_piena) {
-		flog(LOG_INFO, "c_leggi soddisfatta");
-		esecuzione->contesto[I_RAX] = lavagna;
-	} else {
-		flog(LOG_INFO, "c_leggi mandata in attesa");
-		inserimento_lista(processi_sospesi, esecuzione);
-		schedulatore();
-	}
-}
+// descrittore elemento msgbox
+struct des_msg {
+	natl content;
+	des_msg* next;
+};
 
-extern "C" void c_scrivi(natq arg) {
-	flog(LOG_INFO, "c_scrivi");
+#define MAX_MSG 2
 
-	lavagna = arg;
-	lavagna_piena = true;
+// descrittore msgbox
+struct des_msgbox {
+	des_proc* wait_on_read;
+	des_proc* wait_on_write;
 
-	while(processi_sospesi != nullptr) {
-		des_proc* p = rimozione_lista(processi_sospesi);
-		p->contesto[I_RAX] = lavagna;
-		inserimento_lista(pronti, p);
-	}
+	des_msg* box;
+	natq num = 0;
+};
 
-	inspronti();
+#define MAX_MSGBOX 1024
+des_msgbox msgboxes[MAX_MSGBOX];
+natl msgbox_allocate = 0;
 
-	schedulatore();
-}
-
-extern "C" void c_pulisci() {
-	flog(LOG_INFO, "c_pulisci");
-
-	if(processi_sospesi != nullptr) {
-		flog(LOG_ERR, "coda non vuota");
+extern "C" void c_msgbox_init() {
+	if(msgbox_allocate == MAX_MSGBOX) {
+		flog(LOG_ERR, "Raggiunto limite msgbox");
 		c_abort_p();
+		return;
 	}
 
-	lavagna_piena = false;
+	natl new_box = msgbox_allocate;
+	msgbox_allocate++;
+
+	msgboxes[new_box].wait_on_read = nullptr;
+	msgboxes[new_box].wait_on_write = nullptr;
+	msgboxes[new_box].box = nullptr;
+
+	esecuzione->contesto[I_RAX] = new_box;
+}
+
+natl estrai_fondo(des_msg* lista) {
+	des_msg* p, *q = nullptr;
+	p = lista;
+	
+	while(p->next != nullptr) {
+		p = p->next;
+		q = p;
+	}
+
+	natl res = p->content;
+	// delete p;
+
+	if(q != nullptr) {
+		q->next = nullptr;
+	}
+
+	return res;
+}
+
+void inserisci_testa(des_msg* &lista, natl msg) {
+	des_msg* nuovo = new des_msg;
+	nuovo->content = msg;
+	nuovo->next = lista;
+	
+	lista = nuovo;
+}
+
+extern "C" void a_msgbox_forcesend();
+extern "C" void c_msgbox_recv(natl id) {
+	// non ti fidare
+	if(id < 0 || id >= msgbox_allocate) {
+		flog(LOG_ERR, "msgbox inesistente");
+		c_abort_p();
+		return;
+	}
+
+	des_msgbox* msgbox = &msgboxes[id];
+	if(msgbox->box == nullptr) {
+		// aspetta 
+		inserimento_lista(msgbox->wait_on_read, esecuzione);
+		
+		schedulatore();
+	} else {
+		// c'e' qualcosa, prendilo 
+		natl msg = estrai_fondo(msgbox->box);
+		esecuzione->contesto[I_RAX] = msg;
+
+		msgbox->num--;
+
+		// qualcuno voleva scrivere?
+		if(msgbox->wait_on_write != nullptr) {
+			des_proc* proc = rimozione_lista(msgbox->wait_on_write);
+
+			des_proc* corrente = esecuzione;
+
+			// fai una magata, rimetti a forza scrittore in esecuzione
+			esecuzione = proc;
+
+			// rifai la int
+			a_msgbox_forcesend();
+
+			flog(LOG_ERR, "ripartito scrittore");
+
+			esecuzione = corrente;
+		}
+	}
+}
+
+extern "C" void c_msgbox_send(natl id, natl msg) {
+	// non ti fidare
+	if(id < 0 || id >= msgbox_allocate) {
+		flog(LOG_ERR, "msgbox inesistente");
+		c_abort_p();
+		return;
+	}
+
+	des_msgbox* msgbox = &msgboxes[id];
+	if(msgbox->wait_on_read != nullptr) {
+		// c'e' qualcuno, daglielo subito
+		des_proc* proc = rimozione_lista(msgbox->wait_on_read);
+		proc->contesto[I_RAX] = msg;
+
+		// prima te, qualcuno deve leggere
+		inspronti();
+		inserimento_lista(pronti, proc);
+		schedulatore();
+	} else {
+		// non c'e' nessuno, prova ad aggiungere
+		
+		if(msgbox->num >= MAX_MSG) {
+			// tocca che ti fermi
+			inserimento_lista(msgbox->wait_on_write, esecuzione);
+			schedulatore();
+
+			flog(LOG_ERR, "bloccato scrittore");
+			return;
+		}
+
+		msgbox->num++;
+		inserisci_testa(msgbox->box, msg);
+	}
 }
