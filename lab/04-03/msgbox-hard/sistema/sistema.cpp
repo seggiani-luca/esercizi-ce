@@ -1873,13 +1873,13 @@ extern "C" void c_msgbox_init() {
 	esecuzione->contesto[I_RAX] = new_box;
 }
 
-natl estrai_fondo(des_msg* lista) {
+natl estrai_fondo(des_msg*& lista) {
 	des_msg* p, *q = nullptr;
 	p = lista;
 	
 	while(p->next != nullptr) {
-		p = p->next;
 		q = p;
+		p = p->next;
 	}
 
 	natl res = p->content;
@@ -1887,6 +1887,8 @@ natl estrai_fondo(des_msg* lista) {
 
 	if(q != nullptr) {
 		q->next = nullptr;
+	} else {
+		lista = nullptr;
 	}
 
 	return res;
@@ -1926,6 +1928,7 @@ extern "C" void c_msgbox_recv(natl id) {
 		if(msgbox->wait_on_write != nullptr) {
 			des_proc* proc = rimozione_lista(msgbox->wait_on_write);
 
+			// copiati il processo corrente
 			des_proc* corrente = esecuzione;
 
 			// fai una magata, rimetti a forza scrittore in esecuzione
@@ -1936,6 +1939,10 @@ extern "C" void c_msgbox_recv(natl id) {
 
 			flog(LOG_ERR, "ripartito scrittore");
 
+			// lui dovra' ripartire
+			inserimento_lista(pronti, proc);
+		
+			// riparti tu
 			esecuzione = corrente;
 		}
 	}

@@ -1868,13 +1868,13 @@ extern "C" void c_msgbox_init() {
 	esecuzione->contesto[I_RAX] = new_box;
 }
 
-natl estrai_fondo(des_msg* lista) {
+natl estrai_fondo(des_msg*& lista) {
 	des_msg* p, *q = nullptr;
 	p = lista;
 	
 	while(p->next != nullptr) {
-		p = p->next;
 		q = p;
+		p = p->next;
 	}
 
 	natl res = p->content;
@@ -1882,6 +1882,8 @@ natl estrai_fondo(des_msg* lista) {
 
 	if(q != nullptr) {
 		q->next = nullptr;
+	} else {
+		lista = nullptr;
 	}
 
 	return res;
@@ -1913,8 +1915,6 @@ extern "C" void c_msgbox_recv(natl id) {
 		// c'e' qualcosa, prendilo 
 		natl msg = estrai_fondo(msgbox->box);
 		esecuzione->contesto[I_RAX] = msg;
-
-		msgbox->num--;
 	}
 }
 
@@ -1938,7 +1938,6 @@ extern "C" void c_msgbox_send(natl id, natl msg) {
 		schedulatore();
 	} else {
 		// non c'e' nessuno, prova ad aggiungere
-		msgbox->num++;
 		inserisci_testa(msgbox->box, msg);
 	}
 }

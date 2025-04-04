@@ -2,43 +2,32 @@
 
 natl box;
 
-void scrittore(natq a) {
-		printf("[scrittore] inviato messaggio '%d'\n", 420);
-		msgbox_send(box, 420);
-		
-		flog(LOG_INFO, "scrittore ha terminato");
+void scrittore(natq a){
+    for(natl i = 0; i < 5; i++){
+        printf("[scrittore] sending message '%d'\n", i);
+        msgbox_send(box, i);
+    }
     terminate_p();
 }
 
-void lettore(natq i) {
+void lettore(natq i){
     natl msg;
-		
-		msg = msgbox_recv(box);
-		printf("[lettore %d] ricevuto messaggio '%d'\n", (int)i, msg);
-		
-		flog(LOG_INFO, "lettore ha terminato");
+    while(true){
+        msg = msgbox_recv(box);
+        printf("[lettore %d] received message '%d'\n", (int)i, msg);
+    }
     terminate_p();
 }
+
 
 extern "C" void main()
 {
     box = msgbox_init();
     flog(LOG_INFO, "[main] allocata msgbox %u", box);
 
-		activate_p(lettore, 0, 40, LIV_UTENTE);
-    flog(LOG_INFO, "[main] lettore");
-		activate_p(lettore, 0, 40, LIV_UTENTE);
-    flog(LOG_INFO, "[main] lettore");
-		
-		activate_p(scrittore, 0, 20, LIV_UTENTE);
-    flog(LOG_INFO, "[main] scrittore 0");
-		
-		activate_p(scrittore, 0, 20, LIV_UTENTE);
-    flog(LOG_INFO, "[main] scrittore 1");
-		
-		activate_p(scrittore, 0, 20, LIV_UTENTE);
-    flog(LOG_INFO, "[main] scrittore 2");
-		
+    activate_p(lettore, 0, 40, LIV_UTENTE);
+    activate_p(lettore, 1, 40, LIV_UTENTE);
+    activate_p(scrittore, 0, 10, LIV_UTENTE);
 
     terminate_p();
 }
