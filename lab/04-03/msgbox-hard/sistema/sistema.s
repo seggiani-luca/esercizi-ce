@@ -541,6 +541,7 @@ a_msgbox_send:
 	iretq
 	.cfi_endproc
 
+	// questa praticamente e' inutile (guarda le diff)
 	.global a_msgbox_forcesend
 a_msgbox_forcesend:
 	movq esecuzione, %rbx

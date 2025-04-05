@@ -1902,52 +1902,6 @@ void inserisci_testa(des_msg* &lista, natl msg) {
 	lista = nuovo;
 }
 
-extern "C" void a_msgbox_forcesend();
-extern "C" void c_msgbox_recv(natl id) {
-	// non ti fidare
-	if(id < 0 || id >= msgbox_allocate) {
-		flog(LOG_ERR, "msgbox inesistente");
-		c_abort_p();
-		return;
-	}
-
-	des_msgbox* msgbox = &msgboxes[id];
-	if(msgbox->box == nullptr) {
-		// aspetta 
-		inserimento_lista(msgbox->wait_on_read, esecuzione);
-		
-		schedulatore();
-	} else {
-		// c'e' qualcosa, prendilo 
-		natl msg = estrai_fondo(msgbox->box);
-		esecuzione->contesto[I_RAX] = msg;
-
-		msgbox->num--;
-
-		// qualcuno voleva scrivere?
-		if(msgbox->wait_on_write != nullptr) {
-			des_proc* proc = rimozione_lista(msgbox->wait_on_write);
-
-			// copiati il processo corrente
-			des_proc* corrente = esecuzione;
-
-			// fai una magata, rimetti a forza scrittore in esecuzione
-			esecuzione = proc;
-
-			// rifai la int
-			a_msgbox_forcesend();
-
-			flog(LOG_ERR, "ripartito scrittore");
-
-			// lui dovra' ripartire
-			inserimento_lista(pronti, proc);
-		
-			// riparti tu
-			esecuzione = corrente;
-		}
-	}
-}
-
 extern "C" void c_msgbox_send(natl id, natl msg) {
 	// non ti fidare
 	if(id < 0 || id >= msgbox_allocate) {
@@ -1980,5 +1934,54 @@ extern "C" void c_msgbox_send(natl id, natl msg) {
 
 		msgbox->num++;
 		inserisci_testa(msgbox->box, msg);
+	}
+}
+
+// extern "C" void a_msgbox_forcesend();
+extern "C" void c_msgbox_recv(natl id) {
+	// non ti fidare
+	if(id < 0 || id >= msgbox_allocate) {
+		flog(LOG_ERR, "msgbox inesistente");
+		c_abort_p();
+		return;
+	}
+
+	des_msgbox* msgbox = &msgboxes[id];
+	if(msgbox->box == nullptr) {
+		// aspetta 
+		inserimento_lista(msgbox->wait_on_read, esecuzione);
+		
+		schedulatore();
+	} else {
+		// c'e' qualcosa, prendilo 
+		natl msg = estrai_fondo(msgbox->box);
+		esecuzione->contesto[I_RAX] = msg;
+
+		msgbox->num--;
+
+		// qualcuno voleva scrivere?
+		if(msgbox->wait_on_write != nullptr) {
+			des_proc* proc = rimozione_lista(msgbox->wait_on_write);
+
+			// fai prima, chiamalo tu
+			c_msgbox_send(proc->contesto[I_RDI], proc->contesto[I_RSI]);
+
+			// copiati il processo corrente
+			// des_proc* corrente = esecuzione;
+
+			// fai una magata, rimetti a forza scrittore in esecuzione
+			// esecuzione = proc;
+
+			// rifai la int
+			// a_msgbox_forcesend();
+
+			flog(LOG_ERR, "ripartito scrittore");
+
+			// lui dovra' ripartire
+			inserimento_lista(pronti, proc);
+		
+			// riparti tu
+			// esecuzione = corrente;
+		}
 	}
 }
