@@ -24,7 +24,7 @@ const natl DUMMY_PRIORITY = 0;
 struct des_proc {
 	/// identificatore numerico del processo
 	natw id;
-/// livello di privilegio (LIV_UTENTE o LIV_SISTEMA)
+	/// livello di privilegio (LIV_UTENTE o LIV_SISTEMA)
 	natw livello;
 	/// precedenza nelle code dei processi
 	natl precedenza;
@@ -46,7 +46,16 @@ struct des_proc {
 	/// parametro `a` passato alla `activate_p`/`_pe` che ha creato questo processo
 	natq  parametro;
 	/// @}
+
+	// round robin
+	int quanto;
 };
+
+// max tick round robin
+#define MAX_QUANTO 10
+
+// flag round robin
+bool rr = false;
 
 /// @brief Tabella che associa l'id di un processo al corrispondente des_proc.
 ///
@@ -349,6 +358,8 @@ extern "C" void c_delay(natl n)
 /// Driver del timer
 extern "C" void c_driver_td(void)
 {
+	// parte delay
+
 	inspronti();
 
 	if (sospesi != nullptr) {
@@ -363,6 +374,15 @@ extern "C" void c_driver_td(void)
 	}
 
 	schedulatore();
+
+	// parte round robin
+	
+	if(!(esecuzione->quanto--)) {
+		esecuzione->quanto = MAX_QUANTO;
+		inserimento_lista(pronti, esecuzione);
+		schedulatore();
+	}
+
 }
 /// @}
 
@@ -415,7 +435,7 @@ extern "C" void gestore_eccezioni(int tipo, natq errore, vaddr rip)
 		panic("ERRORE NELLE TABELLE DI TRADUZIONE");
 	}
 
-	if (in_sis_c(rip)) {
+	if (!(errore & PF_USER) && in_sis_c(rip)) {
 		// l'indirizzo dell'istruzione che ha causato il fault è
 		// all'interno del modulo sistema.
 		panic("ERRORE DI SISTEMA");
@@ -1409,7 +1429,7 @@ extern "C" void main(natq)
 	esecuzione = &init;
 	esecuzione_precedente = esecuzione;
 
-	flog(LOG_INFO, "Nucleo di Calcolatori Elettronici, v8.2");
+	flog(LOG_INFO, "Nucleo di Calcolatori Elettronici, v8.3");
 
 	// inizializziamo la parte M2 della memoria
 	init_frame();
@@ -1833,111 +1853,19 @@ void process_dump(des_proc* p, log_sev sev)
 /// @}
 /// @}
 
-// funzionalita' msgbox
+// primitive round robin
+extern "C" void c_abilita_rr() {
+	flog(LOG_INFO, "abilita_rr()");
 
-// descrittore elemento msgbox
-struct des_msg {
-	natl content;
-	des_msg* next;
-};
-
-// descrittore msgbox
-struct des_msgbox {
-	des_proc* wait_on_read;
-
-	des_msg* box;
-};
-
-#define MAX_MSGBOX 1024
-des_msgbox msgboxes[MAX_MSGBOX];
-natl msgbox_allocate = 0;
-
-extern "C" void c_msgbox_init() {
-	if(msgbox_allocate == MAX_MSGBOX) {
-		flog(LOG_ERR, "Raggiunto limite msgbox");
-		c_abort_p();
-		return;
-	}
-
-	natl new_box = msgbox_allocate;
-	msgbox_allocate++;
-
-	msgboxes[new_box].wait_on_read = nullptr;
-	msgboxes[new_box].box = nullptr;
-
-	esecuzione->contesto[I_RAX] = new_box;
+	rr = true;
 }
 
-natl estrai_fondo(des_msg*& lista) {
-	des_msg* p, *q = nullptr;
-	p = lista;
-	
-	while(p->next != nullptr) {
-		q = p;
-		p = p->next;
-	}
+extern "C" void c_disabilita_rr() {
+	flog(LOG_INFO, "disabilita_rr()");
 
-	natl res = p->content;
-	// delete p;
+	rr = false;
 
-	if(q != nullptr) {
-		q->next = nullptr;
-	} else {
-		lista = nullptr;
-	}
-
-	return res;
-}
-
-void inserisci_testa(des_msg* &lista, natl msg) {
-	des_msg* nuovo = new des_msg;
-	nuovo->content = msg;
-	nuovo->next = lista;
-	
-	lista = nuovo;
-}
-
-extern "C" void c_msgbox_recv(natl id) {
-	// non ti fidare
-	if(id < 0 || id >= msgbox_allocate) {
-		flog(LOG_ERR, "msgbox inesistente");
-		c_abort_p();
-		return;
-	}
-
-	des_msgbox* msgbox = &msgboxes[id];
-	if(msgbox->box == nullptr) {
-		// aspetta 
-		inserimento_lista(msgbox->wait_on_read, esecuzione);
-		
-		schedulatore(); // esecuzione contiene lettore, ce lo scordiamo
-	} else {
-		// c'e' qualcosa, prendilo 
-		natl msg = estrai_fondo(msgbox->box);
-		esecuzione->contesto[I_RAX] = msg;
-	}
-}
-
-extern "C" void c_msgbox_send(natl id, natl msg) {
-	// non ti fidare
-	if(id < 0 || id >= msgbox_allocate) {
-		flog(LOG_ERR, "msgbox inesistente");
-		c_abort_p();
-		return;
-	}
-
-	des_msgbox* msgbox = &msgboxes[id];
-	if(msgbox->wait_on_read != nullptr) {
-		// c'e' qualcuno, daglielo subito
-		des_proc* proc = rimozione_lista(msgbox->wait_on_read);
-		proc->contesto[I_RAX] = msg;
-
-		// prima te, qualcuno deve leggere
-		inspronti();
-		inserimento_lista(pronti, proc);
-		schedulatore();
-	} else {
-		// non c'e' nessuno, prova ad aggiungere
-		inserisci_testa(msgbox->box, msg);
+	for(natl i = 0; i < MAX_PROC; i++) {
+		if(proc_table[i]) proc_table[i]->quanto = MAX_QUANTO;
 	}
 }

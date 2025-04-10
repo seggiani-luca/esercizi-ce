@@ -239,9 +239,6 @@ init_idt:
 	carica_gate	TIPO_AB		a_abort_p	LIV_UTENTE
 	carica_gate	TIPO_L		a_do_log	LIV_UTENTE
 	carica_gate	TIPO_GMI	a_getmeminfo	LIV_UTENTE
-	carica_gate TIPO_MB_INIT	a_msgbox_init	LIV_UTENTE
-	carica_gate TIPO_MB_RECV	a_msgbox_recv	LIV_UTENTE
-	carica_gate TIPO_MB_SEND	a_msgbox_send	LIV_UTENTE
 
 	// primitive per il livello I/O (tipi 0x3-)
 	carica_gate	TIPO_APE	a_activate_pe	LIV_SISTEMA
@@ -251,6 +248,10 @@ init_idt:
 	carica_gate	TIPO_ACC	a_access	LIV_SISTEMA
 	carica_gate	TIPO_PA		a_phys_alloc	LIV_SISTEMA
 	carica_gate	TIPO_PD		a_phys_dealloc	LIV_SISTEMA
+
+	// primitive round robin
+	carica_gate	TIPO_ARR	a_abilita_rr	LIV_UTENTE
+	carica_gate	TIPO_DRR	a_disabilita_rr	LIV_UTENTE
 
 	// i tipi 0x4- verranno usati per le primitive fornite dal modulo I/O
 	// (si veda fill_io_gates() in io.s)
@@ -505,38 +506,27 @@ a_phys_dealloc:
 	.cfi_endproc
 /// @}
 
-	.extern c_msgbox_init
-a_msgbox_init:
+// primitive round robin
+	.extern c_abilita_rr
+a_abilita_rr:
 	.cfi_startproc
 	.cfi_def_cfa_offset 40
 	.cfi_offset rip, -40
 	.cfi_offset rsp, -16
 	call salva_stato
-	call c_msgbox_init
-	call carica_stato
-	iretq
-	.cfi_endproc
-	
-	.extern c_msgbox_recv
-a_msgbox_recv:
-	.cfi_startproc
-	.cfi_def_cfa_offset 40
-	.cfi_offset rip, -40
-	.cfi_offset rsp, -16
-	call salva_stato
-	call c_msgbox_recv // cambia (possibilmente) contesto
+	call c_abilita_rr 
 	call carica_stato
 	iretq
 	.cfi_endproc
 
-	.extern c_msgbox_send
-a_msgbox_send:
+	.extern c_disabilita_rr
+a_disabilita_rr:
 	.cfi_startproc
 	.cfi_def_cfa_offset 40
 	.cfi_offset rip, -40
 	.cfi_offset rsp, -16
 	call salva_stato
-	call c_msgbox_send
+	call c_disabilita_rr 
 	call carica_stato
 	iretq
 	.cfi_endproc
