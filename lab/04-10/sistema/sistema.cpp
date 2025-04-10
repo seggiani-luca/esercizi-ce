@@ -376,13 +376,14 @@ extern "C" void c_driver_td(void)
 	schedulatore();
 
 	// parte round robin
-	
-	if(!(esecuzione->quanto--)) {
-		esecuzione->quanto = MAX_QUANTO;
-		inserimento_lista(pronti, esecuzione);
-		schedulatore();
-	}
 
+	if(rr) {
+		if(!(esecuzione->quanto--)) {
+			esecuzione->quanto = MAX_QUANTO;
+			inserimento_lista(pronti, esecuzione);
+			schedulatore();
+		}
+	}
 }
 /// @}
 
@@ -1858,6 +1859,10 @@ extern "C" void c_abilita_rr() {
 	flog(LOG_INFO, "abilita_rr()");
 
 	rr = true;
+	
+	for(natl i = 0; i < MAX_PROC; i++) {
+		if(proc_table[i]) proc_table[i]->quanto = MAX_QUANTO;
+	}
 }
 
 extern "C" void c_disabilita_rr() {
