@@ -1,0 +1,74 @@
+Due processi possono comunicare tramite una \verb|pipe|, un canale con una estremit\`a di scrittura e una
+di lettura attraverso il quale viaggia una sequenza di caratteri. I caratteri inviati dall'estremit\`a di
+scrittura possono essere letti dall'estremit\`a di lettura.
+Il sistema contiene un numero prefissato \verb|pipe|, numerate da zero a \verb|MAX_PIPE| meno uno.
+Un processo che voglia leggere o scrivere in una pipe deve prima {\em aprire} la corrispondente
+estremit\`a, bloccandosi (se necessario) in attesa che venga aperta anche l'altra estremit\`a.
+All'apertura, i processi ricevono un {\em identificatore privato} da zero a \verb|MAX_OPEN_PIPES| meno uno poi lo utilizzano per riferisi all'estremit\`a della pipe
+durante le successive operazioni di lettura o scrittura. Un processo pu\`o aprire pi\`u
+di una estremit\`a di qualunque pipe, fino ad un massimo di \verb|MAX_OPEN_PIPES|. Le estremit\`a devono essere {\em chiuse} quando
+non servono pi\`u. Quando un processo termina, il sistema provvede comunque a chiudere tutte le estremit\`a che risultavano ancora aperte dal processo.
+Le operazioni di lettura o scrittura
+sono sincrone: lo scrittore di blocca in attesa di aver trasferito tutti i byte, e il lettore si
+blocca in attesa di averli ricevuti tutti. Se una delle due estremit\`a viene chiusa mentre un processo
+\`e in attesa sull'altra, il processo si risveglia dalla primitiva di lettura o scrittura e riceve
+il valore \verb|false|.
+
+Per realizzare le \verb|pipe| aggiungiamo le seguenti primitive (abortiscono il processo in caso di errore):
+\begin{itemize}
+   \item \verb|natl openpipe(natl pipeid, bool writer)| (tipo 0x2a, gi\`a realizzata):
+   	Apre l'estremit\`a di lettura (se \verb|writer| \`e \verb|false|) o di scrittura
+	(se \verb|writer| \`e \verb|true|) della pipe con identificatore \verb|pipeid|.
+	\`E un errore se la pipe non esiste, o se il processo ha troppe pipe aperte.
+	Restituisce l'identificatore privato della pipe, o \verb|0xFFFFFFFF| se l'estremit\`a
+	della pipe \`e gi\`a aperta (dallo stesso o da un altro processo).
+   \item \verb|bool writepipe(natl slotid, const char *buf, natl n)| (tipo 0x2b, realizzara in parte):
+   	Invia \verb|n| caratteri dal buffer \verb|buf| sulla pipe con identificatore privato
+	\verb|slotid|.  \`E un errore se la pipe \verb|slotid| non \`e l'identificatore
+	valido di una pipe aperta in scrittura, o se il buffer non \`e accessibile in lettura 
+	a tutti i processi.
+	Restituisce \verb|false| se non \`e stato possibile trasferire tutti i byte.
+   \item \verb|bool readpipe(natl slotid, char *buf, natl n)| (tipo 0x2c, realizzata in parte):
+   	Riceve \verb|n| caratteri dal dalla pipe di identificatore privato \verb|slotid|
+	e li scrive nel buffer \verb|buf|. 
+	\`E un errore se la pipe \verb|slotid| non \`e l'identificatore
+	valido di una pipe aperta in lettura, o se il buffer non \`e accessibile in scrittura 
+	da tutti i processi.
+	Restituisce \verb|false| se non \`e stato possibile ricevere tutti i byte.
+   \item \verb|void closepipe(natl slotid)| (tipo 0x2d, da realizzare):
+   	Chiude una estremit\`a di una pipe. \`E un errore se \verb|slotid| non \`e
+	l'indentificatore privato valido di una estremit\`a di pipe ancora aperta.
+\end{itemize}
+
+Per descrivere una \verb|pipe| aggiungiamo al nucleo la seguente struttura dati:
+
+\begin{verbatim}
+struct des_pipe {
+    natl writer;
+    natl reader;
+    natl w_pending;
+    const char *w_buf;
+    natl r_pending;
+    char *r_buf;
+};
+\end{verbatim}
+Il campo \verb|writer| identifica il processo che ha aperto l'estremit\`a di scrittura,
+e il campo \verb|reader| identifica il processo che ha aperto l'estremit\`a di lettura.
+La pipe \`e libera se entrambi sono zero. I campi assumono il valore \verb|0xFFFFFFFF|
+se la corrispondente \`e estremit\`a \`e stata chiusa, ma l'altra \`e ancora aperta.
+Il campo \verb|w_buf| punta al prossimo byte da trasferire dal buffer dello scrittore,
+ed \`e diverso da \verb|nullptr| solo se lo scrittore \`e bloccato in attesa di completare
+il trasferimento. Analogamente, il capo \verb|r_buf| punta alla prossima locazione da
+riempire nel buffer del ricevitore, ed \`e diverso da \verb|nullptr| solo se il lettore
+\`e bloccato in attesa di ricevere tutti i byte. I campi \verb|w_pending| e \verb|r_pending|
+contengono il numero di byte ancora da scrivere o leggere, rispettivamente.
+
+Inoltre, aggiungiamo il seguente campo ai descrittori di processo:
+\begin{verbatim}
+    natl mypipes[MAX_OPEN_PIPES];
+\end{verbatim}
+L'array \`e indicizzato tramite gli identificatori privati. Ogni entrata contiene
+\verb|0xFFFFFFFF| se l'identificatore non \`e usato, oppure contiene l'identificatore
+della pipe di cui il processo ha aperto una estremit\`a.
+
+Modificare il file \verb|sistema.cpp| in modo da realizzare le parti mancanti.
