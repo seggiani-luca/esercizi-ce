@@ -1895,8 +1895,8 @@ extern "C" void c_openpipe(natl pipeid, bool writer) { // restituisce natl
 
 	// se qualcuno aspettava lo libera
 	if(other_role != 0xffffffff) {
-		inserimento_lista(pronti, proc_table[other_role]);
 		inspronti();
+		inserimento_lista(pronti, proc_table[other_role]);
 	} 
 
 	// trova un id locale libero
@@ -1932,8 +1932,14 @@ extern "C" void c_writepipe(natl slotid, const char *buf, natl n) { // restituis
 	flog(LOG_DEBUG, "writepipe(), slotid=%u, buf=%p, n=%u", slotid, buf, n);
 	
 	// controlli
-	if(esecuzione->proc_pipes[slotid] == 0xffffffff) { // id locale invalido
-		flog(LOG_WARN, "writepipe() ha abortito: slotid invalido");
+	if(slotid >= MAX_OPEN_PIPES) { // id locale invalido
+		flog(LOG_WARN, "readpipe() ha abortito: slotid invalido");
+		c_abort_p();
+		return;
+	}
+
+	if(esecuzione->proc_pipes[slotid] == 0xffffffff) { // id locale inesistente 
+		flog(LOG_WARN, "readpipe() ha abortito: slotid inesistente");
 		c_abort_p();
 		return;
 	}
@@ -1953,6 +1959,11 @@ extern "C" void c_writepipe(natl slotid, const char *buf, natl n) { // restituis
 	if(!c_access(reinterpret_cast<vaddr>(buf), n, true)) {
 		flog(LOG_WARN, "writepipe() ha abortito: buffer invalido");
 		c_abort_p();
+		return;
+	}
+	
+	if(pipe->reader == 0xffffffff) { // non c'è lettore
+		esecuzione->contesto[I_RAX] = false;
 		return;
 	}
 
@@ -1976,7 +1987,8 @@ extern "C" void c_writepipe(natl slotid, const char *buf, natl n) { // restituis
 		inspronti();
 	}
 
-	// a questo punto se c'è un lettore in attesa liberalo, se no aspettane un altro 
+	// a questo punto se c'è un lettore in attesa da liberare liberalo, 
+	// se no aspettane un altro 
 	if(!pipe->r_pending && pipe->r_buf) {
 		pipe->r_buf = nullptr;
 		des_proc *reader = proc_table[pipe->reader];
@@ -1994,8 +2006,14 @@ extern "C" void c_readpipe(natl slotid, char* buf, natl n) { // restituisce bool
 	flog(LOG_DEBUG, "readpipe(), slotid=%u, buf=%p, n=%u", slotid, buf, n);
 	
 	// controlli
-	if(esecuzione->proc_pipes[slotid] == 0xffffffff) { // id locale invalido
+	if(slotid >= MAX_OPEN_PIPES) { // id locale invalido
 		flog(LOG_WARN, "readpipe() ha abortito: slotid invalido");
+		c_abort_p();
+		return;
+	}
+
+	if(esecuzione->proc_pipes[slotid] == 0xffffffff) { // id locale inesistente 
+		flog(LOG_WARN, "readpipe() ha abortito: slotid inesistente");
 		c_abort_p();
 		return;
 	}
@@ -2015,6 +2033,11 @@ extern "C" void c_readpipe(natl slotid, char* buf, natl n) { // restituisce bool
 	if(!c_access(reinterpret_cast<vaddr>(buf), n, true)) {
 		flog(LOG_WARN, "readpipe() ha abortito: buffer invalido");
 		c_abort_p();
+		return;
+	}
+	
+	if(pipe->writer == 0xffffffff) { // non c'è scrittore 
+		esecuzione->contesto[I_RAX] = false;
 		return;
 	}
 
@@ -2038,7 +2061,8 @@ extern "C" void c_readpipe(natl slotid, char* buf, natl n) { // restituisce bool
 		inspronti();
 	}
 
-	// a questo punto se c'è uno scrittore in attesa liberalo, se no aspettane un altro 
+	// a questo punto se c'è uno scrittore in attesa da liberare liberalo, 
+	// se no aspettane un altro 
 	if(!pipe->w_pending && pipe->w_buf) {
 		pipe->w_buf = nullptr;
 		des_proc *writer = proc_table[pipe->writer];

@@ -446,6 +446,8 @@ void main_body(natq id)
 	new_proc(00, 3);
 	delay(1);
 	dbg("=== FINE ===");
+	
+	pause();
 
 	test_num = 1;
 	dbg(">>>INIZIO<<<: open/close senza scambio di dati");
@@ -458,6 +460,8 @@ void main_body(natq id)
 	if (t01n0 == 3) msg("OK");
 	dbg("=== FINE ===");
 
+	pause();
+	
 	test_num = 2;
 	dbg(">>>INIZIO<<<: più pipe");
 	new_proc(02, 0);
@@ -466,6 +470,8 @@ void main_body(natq id)
 	sem_wait(end_test);
 	if (t02n0 == 2) msg("OK");
 	dbg("=== FINE ===");
+	
+	pause();
 
 	test_num = 3;
 	dbg(">>>INIZIO<<<: troppe pipe");
@@ -474,6 +480,8 @@ void main_body(natq id)
 	sem_wait(end_test);
 	if (t03n0 == 1) msg("OK");
 	dbg("=== FINE ===");
+	
+	pause();
 
 	test_num = 4;
 	dbg(">>>INIZIO<<<: chiusura per terminazione");
@@ -488,6 +496,8 @@ void main_body(natq id)
 	if (t04n0 == 4) msg("OK");
 	dbg("=== FINE ===");
 
+	pause();
+	
 	test_num = 4;
 	dbg(">>>INIZIO<<<: chiusura per terminazione");
 	new_proc(04, 0);
@@ -500,6 +510,8 @@ void main_body(natq id)
 	sem_wait(end_test);
 	if (t04n0 == 4) msg("OK");
 	dbg("=== FINE ===");
+	
+	pause();
 
 	test_num = 5;
 	dbg(">>>INIZIO<<<: errori su read/write");
@@ -517,6 +529,8 @@ void main_body(natq id)
 	sem_wait(end_test);
 	if (t05n0 == 4) msg("OK");
 	dbg("=== FINE ===");
+	
+	pause();
 
 	test_num = 6;
 	dbg(">>>INIZIO<<<: chiusura prima di un trasferimento");
@@ -530,6 +544,8 @@ void main_body(natq id)
 	sem_wait(end_test);
 	if (t06n0 == 4) msg("OK");
 	dbg("=== FINE ===");
+	
+	pause();
 
 	test_num = 7;
 	dbg(">>>INIZIO<<<: chiusura durante un trasferimento");

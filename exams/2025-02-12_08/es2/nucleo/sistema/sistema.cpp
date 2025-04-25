@@ -1021,8 +1021,7 @@ extern des_proc* esecuzione_precedente;
 extern "C" void distruggi_pila_precedente();
 /// @endcond
 
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
+extern "C" void closepipe_extrem(natl, des_proc*);
 
 /*! @brief Dealloca tutte le risorse allocate da crea_processo()
  *
@@ -1032,9 +1031,12 @@ extern "C" void distruggi_pila_precedente();
  */
 void distruggi_processo(des_proc* p)
 {
-/// @todo chiudere le pipe ancora aperte
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
+	// libera le pipe
+	for(natl i = 0; i < MAX_OPEN_PIPES; i++) {
+		if(p->mypipes[i] != 0xffffffff) {
+			closepipe_extrem(i, p);
+		}
+	}
 
 	paddr root_tab = p->cr3;
 	// la pila utente può essere distrutta subito, se presente
@@ -1872,17 +1874,35 @@ struct des_pipe {
 /// Array dei descrittori di pipe
 des_pipe array_despipe[MAX_PIPES];
 
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
-
 /// Parte C++ della primitiva inipie()
 extern "C" void c_openpipe(natl p, bool writer)
 {
-/// @todo controllare parametri e stato di openpipe()
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
+	flog(LOG_DEBUG, "openpipe(), pipeid=%u, writer=%d", p, writer);
 
-	des_pipe *dp = &array_despipe[p];
+	// controlli
+	if(p >= MAX_PIPES) { // pipeid invalido
+		flog(LOG_WARN, "openpipe() ha abortito: pipeid invalido");
+		c_abort_p();
+		return;
+	}
+
+	// trova un id locale libero
+	natl free_slot = 0xffffffff;
+	for(natl i = 0; i < MAX_OPEN_PIPES; i++) {
+		if(esecuzione->mypipes[i] == 0xffffffff) {
+			free_slot = i;
+		}
+	}
+
+	// se non c'è slot libero abortisci
+	if(free_slot == 0xffffffff) {
+		flog(LOG_WARN, "openpipe() ha abortito: nessuno slot libero");
+		c_abort_p();
+		return;
+	}
+
+	des_pipe* dp = &array_despipe[p]; // puntatore al pipe
+
 	natl otherproc, *myrole;
 	if (writer) {
 		myrole = &dp->writer;
@@ -1899,19 +1919,46 @@ extern "C" void c_openpipe(natl p, bool writer)
 		inserimento_lista(pronti, proc_table[otherproc]);
 	}
 	*myrole = esecuzione->id;
-	esecuzione->mypipes[slot] = p;
-	esecuzione->contesto[I_RAX] = slot;
+	esecuzione->mypipes[free_slot] = p;
+	esecuzione->contesto[I_RAX] = free_slot;
 	schedulatore();
 }
 
 extern "C" void c_writepipe(natl s, const char *buf, natl n)
 {
-/// @todo controllare parametri e stati di writepipe()
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
+	flog(LOG_DEBUG, "writepipe(), slotid=%u, buf=%p, n=%u", s, buf, n);
+	
+	// controlli
+	if(esecuzione->mypipes[s] == 0xffffffff) { // id locale invalido
+		flog(LOG_WARN, "writepipe() ha abortito: slotid invalido");
+		c_abort_p();
+		return;
+	}
 
-	for ( ; dp->r_pending && n; dp->r_pending--, n--) // questo copia quanto si
-																										// sta aspettando di leggere
+	// puoi ricavarti un id pipe valido
+	natl pipeid = esecuzione->mypipes[s];
+	des_pipe* dp = &array_despipe[pipeid]; // puntatore al pipe
+	
+	if(dp->writer != esecuzione->id) { // non è scrittore
+		flog(LOG_WARN, "writepipe() ha abortito: esecuzione non è scrittore");
+		c_abort_p();
+		return;
+	}
+
+	// per il controllo sul buffer usiamo la parte c della primitiva access, firma:
+	// extern "C" bool c_access(vaddr begin, natq dim, bool writeable, bool shared = true)
+	if(!c_access(reinterpret_cast<vaddr>(buf), n, true)) {
+		flog(LOG_WARN, "writepipe() ha abortito: buffer invalido");
+		c_abort_p();
+		return;
+	}
+	
+	if(dp->reader == 0xffffffff) { // non c'è lettore
+		esecuzione->contesto[I_RAX] = false;
+		return;
+	}
+
+	for ( ; dp->r_pending && n; dp->r_pending--, n--) 
 		*dp->r_buf++ = *buf++;
 
 	if (n) { // qui e' rimasto qualcosa 
@@ -1935,9 +1982,37 @@ extern "C" void c_writepipe(natl s, const char *buf, natl n)
 
 extern "C" void c_readpipe(natl s, char *buf, natl n)
 {
-/// @todo controllare parametri e stati di readpipe()
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
+	flog(LOG_DEBUG, "readpipe(), slotid=%u, buf=%p, n=%u", s, buf, n);
+	
+	// controlli
+	if(esecuzione->mypipes[s] == 0xffffffff) { // id locale invalido
+		flog(LOG_WARN, "readpipe() ha abortito: slotid invalido");
+		c_abort_p();
+		return;
+	}
+
+	// puoi ricavarti un id pipe valido
+	natl pipeid = esecuzione->mypipes[s];
+	des_pipe* dp = &array_despipe[pipeid]; // puntatore al pipe
+	
+	if(dp->reader != esecuzione->id) { // non è lettore
+		flog(LOG_WARN, "readpipe() ha abortito: esecuzione non è lettore");
+		c_abort_p();
+		return;
+	}
+
+	// per il controllo sul buffer usiamo la parte c della primitiva access, firma:
+	// extern "C" bool c_access(vaddr begin, natq dim, bool writeable, bool shared = true)
+	if(!c_access(reinterpret_cast<vaddr>(buf), n, true)) {
+		flog(LOG_WARN, "readpipe() ha abortito: buffer invalido");
+		c_abort_p();
+		return;
+	}
+	
+	if(dp->writer == 0xffffffff) { // non c'è scrittore
+		esecuzione->contesto[I_RAX] = false;
+		return;
+	}
 
 	for ( ; dp->w_pending && n; dp->w_pending--, n--)
 		*buf++ = *dp->w_buf++;
@@ -1961,14 +2036,74 @@ extern "C" void c_readpipe(natl s, char *buf, natl n)
 	schedulatore();
 }
 
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
-
 /// Parte C++ della primitiva closepipe()
 extern "C" void c_closepipe(natl s)
 {
-// ( SOLUZIONE 2025-02-12
-//   SOLUZIONE 2025-02-12 )
+	flog(LOG_DEBUG, "closepipe(), slotid=%u", s);
+	
+	// controlli
+	if(esecuzione->mypipes[s] == 0xffffffff) { // id locale invalido
+		flog(LOG_WARN, "closepipe() ha abortito: slotid invalido");
+		c_abort_p();
+		return;
+	}
+		
+	inspronti();
+	closepipe_extrem(s, esecuzione);
+
+	schedulatore();
 }
-//   ESAME 2025-02-12 )
-/// @}
+
+extern "C" void closepipe_extrem(natl slotid, des_proc* proc) {
+	
+	// puoi ricavarti un id pipe valido
+	natl pipeid = proc->mypipes[slotid];
+	des_pipe* pipe = &array_despipe[pipeid]; // puntatore al pipe
+	
+	// verifica che sia lettore o scrittore
+	if(pipe->writer == proc->id) { // scrittore
+
+		// controlla se qualcuno stava leggendo
+		if(pipe->r_pending != 0) {
+			natl other_role = pipe->reader;
+			des_proc* other_proc = proc_table[other_role];
+			other_proc->contesto[I_RAX] = false;
+
+			inserimento_lista(pronti, other_proc);
+		}
+
+		// aggiorna gli id
+		if(pipe->reader == 0xffffffff) {
+			pipe->writer = pipe->reader = 0;
+		} else {
+			pipe->writer = 0xffffffff;
+		}
+
+		// ripulisci anche i buffer
+		pipe->w_pending = 0;
+		pipe->w_buf = nullptr;
+	}
+	
+	if(pipe->reader == proc->id) { // lettore
+
+		// controlla se qualcuno stava scrivendo
+		if(pipe->w_pending != 0) {
+			natl other_role = pipe->writer;
+			des_proc* other_proc = proc_table[other_role];
+			other_proc->contesto[I_RAX] = false;
+
+			inserimento_lista(pronti, other_proc);
+		}
+		
+		// aggiorna gli id
+		if(pipe->writer == 0xffffffff) {
+			pipe->reader = pipe->writer = 0;
+		} else {
+			pipe->reader = 0xffffffff;
+		}
+		
+		// ripulisci anche il buffer
+		pipe->r_pending = 0;
+		pipe->r_buf = nullptr;
+	}
+}
