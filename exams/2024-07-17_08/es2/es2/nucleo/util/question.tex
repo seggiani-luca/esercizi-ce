@@ -1,0 +1,71 @@
+Vogliamo permettere ai processi di livello sistema di essere notificati quando si verificano
+dei particolari eventi all'interno del modulo sistema. Ci limitiamo a considerare solo gli
+eventi corrispondenti alla terminazione (o abort) di un processo di livello utente.
+I processi di livello sistema interessati a questo tipo di eventi devono prima {\em registrarsi}
+tramite una nuova primitiva \verb|evreg()|;
+da quel punto in poi verranno {\em notificati} ogni volta che un
+processo utente termina (o abortisce).
+
+Per realizzare il meccanismo modifichiamo la primitiva \verb|wfi()| in modo che possa attendere
+notifiche di eventi, oltre che richieste di interruzione. La primitiva modificata deve restituire
+un valore con il seguente significato:
+\begin{itemize}
+ \item 1: \`e stata ricevuta una richiesta di interruzione (comportamento normale della \verb|wfi()|);
+ \item 2: \`e stata ricevuta una notifica di terminazione;
+ \item 3: entrambe le cose (notifica di terminazione e richiesta di interruzione).
+\end{itemize}
+Se la \verb|wfi()| restituisce 2 o 3, il processo deve poi {\em rispondere} alla notifica invocando
+la primitiva \verb|evget()|, che restituisce l'id del processo terminato. La primitiva \verb|evget()|
+pu\`o essere invocata pi\`u volte (anche senza aver prima invocato \verb|wfi()|) e non \`e mai
+bloccante: se non ci sono notifiche pendenti si limita a restituire 0.
+
+Il meccanismo, come descritto, impone anche di modificare gli handler, in quanto ora pu\`o accadere
+che un processo invochi \verb|wfi()|, inviando l'EOI all'APIC e bloccandosi, e poi si risvegli a causa
+di una notifica. Una richiesta di interruzione pu\`o dunque arrivare mentre il processo non \`e
+bloccato dentro la \verb|wfi()|; in quel caso l'handler non pu\`o mettere il processo forzatamente in
+esecuzione, ma deve limitarsi a settare un flag nel descrittore del processo. Il processo noter\`a
+questo flag e agir\`a di conseguenza la prossima volta che invoca \verb|wfi()|.
+
+Pi\`u processi possono registarsi per gli eventi, e ciascuno di essi deve ricevere tutte le notifiche
+generate dal momento in cui si \`e registrato in poi. Diciamo che la notifica di un evento \`e {\em in corso} se i
+processi registrati sono stati notificati, ma non hanno ancora risposto tutti. 
+Quando tutti i processi registrati hanno risposto, diciamo che la notifica \`e {\em completata}.
+Un nuovo evento pu\`o essere notificato solo dopo che la notifica del precedente \`e stata completata.
+Infine, per evitare che gli id dei processi terminati vengano riusati prima che i processi registrati
+abbiano avuto il tempo di riceverli, i processi terminati vengono distrutti solo al completamento
+della notifica.
+
+Per realizzare il meccanismo aggiungiumo i seguenti campi al descrittore di processo:
+\begin{verbatim}
+    bool registrato;
+    bool notificato;
+    bool bloccato;
+    bool ricevuto_intr;
+\end{verbatim}
+Dove: \verb|registrato| \`e true se il processo \`e registrato per la notifica degli eventi;
+\verb|notificato| \`e true se il processo ha ricevuto una notifica a cui non ha ancora risposto;
+\verb|bloccato| \`e true se il processo \`e bloccato nella \verb|wfi()|;
+\verb|ricevuto_intr| \`e true se \`e arrivata una richiesta di interruzione mentre il processo non
+era bloccato nella \verb|wfi()|.
+
+Aggiungiamo inoltre le seguenti variabili globali:
+\begin{verbatim}
+    des_proc *in_notifica;
+    natq risposte_mancanti;
+    des_proc *terminati;
+\end{verbatim}
+Dove: \verb|in_notifica| punta al descrittore del processo (terminato) la cui notifica \`e
+ancora in corso (nullptr se non ci sono notifiche in corso);
+\verb|risposte_mancanti| conta quanti processi registrati devono ancora rispondere alla
+notifica in corso (0 se non ci sono notifiche in corso);\
+\verb|terminati| \`e una coda di processi terminati la cui notifica \`e stata rimandata
+perch\'e ce n'era gi\`a un'altra in corso.
+
+Modifichiamo gli handler e la \verb|wfi()| come descritto e aggiungiamo le seguenti primitive (invocabili solo da livello sistema):
+\begin{itemize}
+  \item \verb|bool evreg()|: registra il processo per la ricezione delle notifiche; restituisce
+  false in caso di errore (processo gi\`a registrato, notifica in corso);
+  \item \verb|natq evget()|: risponde ad eventuali notifiche; restituisce l'id di un processo terminato,
+  o 0 se non ci sono notifiche o se il processo non era registrato.
+\end{itemize}
+Modificare il file \verb|sistema.cpp| per completare le parti mancanti.
