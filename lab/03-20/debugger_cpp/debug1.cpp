@@ -3,7 +3,7 @@
 char saved_byte;
 
 void foo(){
-    printf("Ciao sono la funzione foo\n");
+    printf("sono la funzione foo\n");
 }
 
 extern "C" void a_debug();
