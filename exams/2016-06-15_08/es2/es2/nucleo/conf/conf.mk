@@ -1,1 +1,0 @@
-CFLAGS += -DN_STEP=2
