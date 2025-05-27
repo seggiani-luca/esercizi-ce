@@ -1,0 +1,92 @@
+Colleghiamo al sistema delle periferiche PCI di tipo \verb|ce|, con vendorID \verb|0xedce| e deviceID \verb|0x1234|.
+Ogni periferica \verb|ce| usa 16 byte nello spazio di I/O a partire dall'indirizzo base specificato nel
+registro di configurazione BAR0, sia $b$.
+
+Le periferiche \verb|ce| sono semplici periferiche di uscita con un registro TBR (Transmit Buffer Register),
+nel quale \`e possibile scrivere il prossimo byte da inviare.
+La perifica invia una richiesta di
+interruzione quando ha concluso la tramissione del contenuto di TBR\@; fino ad allora, il registro
+TBR \`e occupato e ulteriori scritture vengono ignorate.
+
+Nel sistema \`e installata un'unica perififerica \verb|ce|, ma vogliamo fare in modo che
+gli utenti possano usarne diverse versioni ``virtuali'', dette VCE, per non dover attendere il completamento
+delle trasmissioni.
+Ciascuna periferica VCE contiene un buffer (realizzato con un array circolare)
+che pu\`o contenere un certo numero di byte
+(al massimo \verb|VCE_BUFSIZE|) in attesa di essere trasmessi sulla periferica reale.
+Dopo la conclusione di ogni trasmissione, il processo esterno associato alla periferica estrae
+un byte da una delle VCE attive e lo trasmette.
+
+Le VCE sono private per processo. I processi che vogliono usare una VCE devono prima allocare la
+propria istanza usando la primitiva:
+\begin{verbatim}
+  bool vcenew()
+\end{verbatim}
+La primitiva restituisce \verb|false| se non \`e stato possibile allocare la VCE\@.
+A quel punto il processo pu\`o usare la primitiva
+\begin{verbatim}
+ void vcewrite(char c)
+\end{verbatim}
+per inviare un byte nella VCE\@. La primitiva non attende la conclusione del trasferimento, ma pu\`o
+bloccare il processo in attesa che si liberi spazio per il byte nel buffer della VCE\@.
+La primitiva \verb|vcenew()| abortisce il processo se questo aveva gi\`a una VCE; la primitiva \verb|vcewrite()|
+lo abortisce se non ce l'aveva.
+
+Per descrivere le periferiche \verb|ce| e \verb|vce| aggiungiamo le seguenti strutture dati al modulo I/O:
+\begin{verbatim}
+struct vce_des {
+    char buf[VCE_BUFSIZE];
+    natl head;
+    natl tail;
+    natl n;
+    natl sync;
+    bool waiting;
+    bool terminated;
+};
+struct ce_des {
+    vce_des *vces[MAX_PROC];
+    bool busy;
+    ioaddr iTBR;
+    natl mutex;
+} ce;
+\end{verbatim}
+La struttura \verb|vce_des| descrive i buffer interni
+alle \verb|vce|: \verb|buf| \`e l'array circolare;
+i byte vanno inseriti all'indice \verb|tail| ed estratti
+dall'indice \verb|head|; il campo \verb|n| conta il numero
+di byte contenuti nell'array; quando un processo vuole inserire
+un byte, ma il buffer \`e pieno, pone \verb|waiting| a \verb|true|\
+e si sospende sul semaforo di sincronizzazione \verb|sync|;
+il campo \verb|terminated| \`e true se il processo propietario della VCE
+\`e terminato.
+
+La struttura \verb|ce_des| descrive la periferica \verb|ce|:
+l'array \verb|vces|, indicizzato dai pid dei processi, contiene i puntatori alla \verb|vce_des| di ogni processo
+(\verb|nullptr| per i processi che non esistono o non hanno una VCE);
+il campo \verb|busy| \`e \verb|true| quando c'\`e una trasmissione in corso; il campo
+\verb|iTBR| contiene l'indirizzo del registro TBR;
+il campo \verb|mutex| \`e l'indice di un semaforo di mutua esclusione per
+l'accesso al \verb|ce_des| e a tutte le VCE\@. Per permettere ai vari processi
+di usare le VCE mentre \`e in corso una tramissione precedente, il \verb|mutex|
+deve essere occupato solo per il tempo strettamente necessario.
+
+Le VCE dei processi devono essere allocate nello heap del modulo I/O (tramite \verb|new|)
+e deallocate (tramite \verb|delete|) quando il loro processo proprietario termina. 
+L'allocazione avviene nella \verb|vcenew()|, ma la responsabilit\`a della deallocazione
+ricade sul processo esterno associato alla periferica \verb|ce|: il processo esterno deve
+deallocare la VCE quando il processo proprietario e terminato e tutti i byte contenuti nella
+VCE sono stati tramessi. Per sapere quando il proprietario termina, il processo
+esterno sfrutta un meccanismo di notifica che \`e stato aggiunto al modulo sistema.
+Al momento dell'attivazione, il processo \`e stato registrato (tramite 
+un nuovo parametro della \verb|activate_pe()|) per la ricezione di notifiche di terminazione.
+Da quel momento in poi, ogni volta che
+un processo utente termina, il modulo sistema notificher\`a il processo esterno, in particolare
+rimettendolo in esecuzione se si era bloccato nella \verb|wfi()|.
+La prima volta che va in esecuzione, e ogni volta che si sveglia
+dalla \verb|wfi()|, il processo esterno deve invocare la primitiva \verb|evget()| per sapere come mai
+\`e stato risvegliato. La primitiva restituisce 0 in caso di richiesta di interruzione (caso normale)
+e un valore maggiore di zero in caso di notifica di terminazione. Nel secondo caso, il valore restituito
+\`e il pid del processo terminato (se si chiama ripetutamente \verb|evget()| senza ripassare dalla \verb|wfi()|,
+la primitiva restituisce \verb|0xFFFFFFFF|).
+
+Modificare il \verb|io.cpp| in modo da realizzare le parti mancanti.

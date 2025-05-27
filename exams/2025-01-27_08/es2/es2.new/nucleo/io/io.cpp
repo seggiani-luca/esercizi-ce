@@ -1,0 +1,1008 @@
+/// @file io.cpp
+/// @brief Parte C++ del modulo I/O
+/// @addtogroup io Modulo I/O
+///
+/// Dispensa: <https://calcolatori.iet.unipi.it/resources/modulo-io.pdf>
+///
+/// @{
+#include <costanti.h>
+#include <libce.h>
+#include <sys.h>
+#include <sysio.h>
+#include <io.h>
+
+////////////////////////////////////////////////////////////////////////////////
+/// @addtogroup ioheap		Memoria Dinamica
+/// @brief Funzioni per l'utilizzo dello heap da parte del modulo I/O
+///
+/// Dal momento che le funzioni del modulo I/O sono eseguite con le interruzioni
+/// esterne mascherabili abilitate, dobbiamo proteggere lo heap I/O con un
+/// semaforo di mutua esclusione.
+///
+/// @{
+////////////////////////////////////////////////////////////////////////////////
+
+/// Indice del semaforo di mutua esclusione per lo heap I/O
+natl ioheap_mutex;
+
+/*! @brief Alloca un oggetto nello heap I/O.
+ *  @param s		dimensione dell'oggetto
+ *  @return		puntatore all'oggetto (nullptr se heap esaurito)
+ */
+void* operator new(size_t s)
+{
+	void* p;
+
+	sem_wait(ioheap_mutex);
+	p = alloc(s);
+	sem_signal(ioheap_mutex);
+
+	return p;
+}
+
+/*! @brief Alloca un oggetto nello heap I/O, con vincoli di allineamento.
+ *  @param s		dimensione dell'oggetto
+ *  @param a		allineamento richiesto
+ *  @return		puntatore all'oggetto (nullptr se heap esaurito)
+ *
+ *  Lo heap del modulo I/O si trova in memoria virtuale (parte I/O condivisa),
+ *  quindi non possiamo garantire allineamenti maggiori di DIM_PAGINA.
+ *  In quel caso ricorriamo a phys_alloc(), che usa lo heap del modulo sistema.
+ */
+void* operator new(size_t s, std::align_val_t a)
+{
+	void* p;
+
+	if (static_cast<natq>(a) > DIM_PAGINA)
+		return phys_alloc(s, a);
+
+	sem_wait(ioheap_mutex);
+	p = alloc_aligned(s, a);
+	sem_signal(ioheap_mutex);
+	return p;
+}
+
+/*! @brief Dealloca un oggetto restituendolo all'heap I/O.
+ *  @param p		puntatore all'oggetto
+ */
+void operator delete(void* p)
+{
+	sem_wait(ioheap_mutex);
+	dealloc(p);
+	sem_signal(ioheap_mutex);
+}
+
+/**
+ * @brief Dealloca un oggetto con vincoli di allineamento.
+ *
+ * @param p		puntatore all'oggetto
+ * @param a		allineamento dell'oggetto
+ */
+void operator delete(void *p, std::align_val_t a)
+{
+	if (static_cast<natq>(a) > DIM_PAGINA)
+		return phys_dealloc(p);
+
+	sem_wait(ioheap_mutex);
+	dealloc(p);
+	sem_signal(ioheap_mutex);
+}
+/// @}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @addtogroup console 		Console
+/// @brief Primitive per l'utilizzo di tastiera e video
+///
+/// @note consideriamo esclusivamente il caso di video in modalità testo.
+///
+/// @{
+////////////////////////////////////////////////////////////////////////////////
+
+/// Descrittore della console
+struct des_console {
+	/// Semaforo di mutua esclusione per l'accesso alla console
+	natl mutex;
+	/// Semafor di sincronizzazione (per le letture da tastiera)
+	natl sincr;
+	/// Dove scrivere il prossimo carattere letto
+	char* punt;
+	/// Quanti caratteri resta da leggere
+	natq cont;
+	/// Dimensione del buffer passato a @ref readconsole()
+	natq dim;
+};
+
+/// Unica istanza di des_console
+des_console console;
+
+/// @addtogroup consolesyscall Parti C++/Assembler delle primitive
+/// @{
+
+/*! @brief Parte C+++ della primitiva writeconsole()
+ *  @param buff		buffer contenente i caratteri da scrivere
+ *  @param quanti	numero di caratteri da scrivere
+ */
+extern "C" void c_writeconsole(const char* buff, natq quanti)
+{
+	des_console* p_des = &console;
+
+	if (!access(buff, quanti, false, false)) {
+		flog(LOG_WARN, "writeconsole: parametri non validi: %p, %lu:", buff, quanti);
+		abort_p();
+	}
+
+	sem_wait(p_des->mutex);
+#ifndef AUTOCORR
+	for (natq i = 0; i < quanti; i++)
+		vid::char_write(buff[i]);
+#else /* AUTOCORR */
+	if (quanti > 0 && buff[quanti - 1] == '\n')
+		quanti--;
+	if (quanti > 0)
+		flog(LOG_USR, "%.*s", static_cast<int>(quanti), buff);
+#endif /* AUTOCORR */
+	sem_signal(p_des->mutex);
+}
+/// @}
+
+/*! @brief Avvia una operazione di lettura dalla tastiera
+ *  @param d		descrittore della console
+ *  @param buff		buffer che deve ricevere i caratteri
+ *  @param dim		dimensione di _buff_
+ */
+void startkbd_in(des_console* d, char* buff, natq dim)
+{
+	d->punt = buff;
+	d->cont = dim;
+	d->dim  = dim;
+	kbd::enable_intr();
+}
+
+/// @addtogroup consolesyscall
+/// @{
+
+/*! @brief Parte C++ della primitiva readconsole()
+ *  @param buff		buffer che deve ricevere i caratteri letti
+ *  @param quanti	dimensione di _buff_
+ *  @return		numero di caratteri effettivamente letti
+ */
+extern "C" natq c_readconsole(char* buff, natq quanti)
+{
+	des_console* d = &console;
+	natq rv;
+
+	if (!access(buff, quanti, true)) {
+		flog(LOG_WARN, "readconsole: parametri non validi: %p, %lu:", buff, quanti);
+		abort_p();
+	}
+
+#ifdef AUTOCORR
+	return 0;
+#endif
+
+	if (!quanti)
+		return 0;
+
+	sem_wait(d->mutex);
+	startkbd_in(d, buff, quanti);
+	sem_wait(d->sincr);
+	rv = d->dim - d->cont;
+	sem_signal(d->mutex);
+	return rv;
+}
+/// @}
+
+/// Processo esterno associato alla tastiera
+void estern_kbd(natq)
+{
+	des_console* d = &console;
+	char a;
+	bool fine;
+
+	for(;;) {
+		kbd::disable_intr();
+
+		a = kbd::char_read_intr();
+
+		fine = false;
+		switch (a) {
+		case 0:
+			break;
+		case '\b':
+			if (d->cont < d->dim) {
+				d->punt--;
+				d->cont++;
+				vid::str_write("\b \b");
+			}
+			break;
+		case '\r':
+		case '\n':
+			fine = true;
+			*d->punt = '\0';
+			vid::str_write("\r\n");
+			break;
+		default:
+			*d->punt = a;
+			d->punt++;
+			d->cont--;
+			vid::char_write(a);
+			if (d->cont == 0) {
+				fine = true;
+			}
+			break;
+		}
+		if (fine)
+			sem_signal(d->sincr);
+		else
+			kbd::enable_intr();
+		wfi();
+	}
+}
+
+/// @addtogroup consolesyscall
+/// @{
+
+/*! @brief Parte C++ della primitiva iniconsole()
+ *  @param cc		Attributo colore per il video
+ */
+extern "C" void c_iniconsole(natb cc)
+{
+	vid::clear(cc);
+}
+/// @}
+
+/// Piedino dell'APIC per le richieste di interruzione della tastiera
+const int KBD_IRQ = 1;
+
+/*! @brief Inizializza la tastiera
+ *  @return		true in caso di successo, false altrimenti
+ */
+bool kbd_init()
+{
+	// blocchiamo subito le interruzioni generabili dalla tastiera
+	kbd::disable_intr();
+
+	// svuotiamo il buffer interno della tastiera
+	kbd::drain();
+
+	if (activate_pe(estern_kbd, 0, MIN_EXT_PRIO + INTR_TIPO_KBD, LIV_SISTEMA, KBD_IRQ) == 0xFFFFFFFF) {
+		flog(LOG_ERR, "kbd: impossibile creare estern_kbd");
+		return false;
+	}
+	flog(LOG_INFO, "kbd: tastiera inizializzata");
+	return true;
+}
+
+/*! @brief Inizializza il video (modalità testo)
+ *  @return		true in caso di successo, false altrimenti
+ */
+bool vid_init()
+{
+	vid::clear(0x07);
+	flog(LOG_INFO, "vid: video inizializzato");
+	return true;
+}
+
+/*! @brief Inizializza la console (tastiera + video)
+ *  @return		true in caso di successo, false altrimenti
+ */
+bool console_init()
+{
+	des_console* d = &console;
+
+	if ( (d->mutex = sem_ini(1)) == 0xFFFFFFFF) {
+		flog(LOG_ERR, "console: impossibile creare mutex");
+		return false;
+	}
+	if ( (d->sincr = sem_ini(0)) == 0xFFFFFFFF) {
+		flog(LOG_ERR, "console: impossibile creare sincr");
+		return false;
+	}
+	return kbd_init() && vid_init();
+}
+/// @}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @addtogroup ata 		Interfacce ATA
+/// @brief Primitive per l'utilizzo dell'hard disk
+/// @{
+////////////////////////////////////////////////////////////////////////////////
+
+/// Descrittore di interfaccia ATA
+struct des_ata {
+	/// Ultimo comando inviato all'interfaccia
+	natb comando;
+	/// Indice di un semaforo di mutua esclusione
+	natl mutex;
+	/// Indice di un semaforo di sincronizzazione
+	natl sincr;
+	/// Quanti settori resta da leggere o scrivere
+	natb cont;
+	/// Da dove leggere/dove scrivere il prossimo settore
+	natb* punt;
+	/// Array dei descrittori per il Bus Mastering
+	natl* prd;
+};
+
+/// Descrittore dell'unico hard disk installato nel sistema
+des_ata hard_disk;
+
+/// Piedino dell'APIC per le richieste di interruzione dell'hard disk
+const natb HD_IRQ = 14;
+
+/*! @brief Prepara i descrittori per il Bus Mastering
+ *  @param d		descrittore dell'hard disk
+ *  @param vett		buffer coinvolto nel trasferimento DMA
+ *  @param quanti	numero di settori da trasferire
+ *  @return		false se i PRD non sono sufficienti per
+ *  			trasferire tutti i byte richiesti,
+ *  			true altrimenti
+ */
+bool prepare_prd(des_ata *d, natb* vett, natb quanti)
+{
+	natq n = quanti * DIM_BLOCK;
+	int i = 0;
+
+	while (n && i < MAX_PRD) {
+		paddr p = trasforma(vett);
+		natq  r = DIM_PAGINA - (p % DIM_PAGINA);
+		if (r > n)
+			r = n;
+		d->prd[i] = p;
+		d->prd[i + 1] = r;
+
+		n -= r;
+		vett += r;
+		i += 2;
+	}
+	if (n)
+		return false;
+	d->prd[i - 1] |= 0x80000000;
+	return true;
+}
+
+/*! @brief Avvia una operazione di ingresso dall'hard disk.
+ *  @param d		descrittore dell'hard disk
+ *  @param vetti	buffer che dovrà ricevere i settori letti
+ *  @param primo	LBA del primo settore da leggere
+ *  @param quanti	numero di settori da leggere
+ */
+void starthd_in(des_ata* d, natb vetti[], natl primo, natb quanti)
+{
+	d->cont = quanti;
+	d->punt = vetti;
+	d->comando = hd::READ_SECT;
+	hd::start_cmd(primo, quanti, hd::READ_SECT);
+}
+
+/// @addtogroup atasyscall Parti C++/Assembler delle primitive
+/// @{
+
+/*! @brief Parte C++ della primitiva readhd_n().
+ *  @param vetti	buffer che dovrà ricevere i settori letti
+ *  @param primo	LBA del primo settore da leggere
+ *  @param quanti	numero di settori da leggere
+ */
+extern "C" void c_readhd_n(natb vetti[], natl primo, natb quanti)
+{
+	des_ata* d = &hard_disk;
+
+	if (!access(vetti, quanti * DIM_BLOCK, true)) {
+		flog(LOG_WARN, "readhd_n: parametri non validi: %p, %d", vetti, quanti);
+		abort_p();
+	}
+
+	if (!quanti)
+		return;
+
+	sem_wait(d->mutex);
+	starthd_in(d, vetti, primo, quanti);
+	sem_wait(d->sincr);
+	sem_signal(d->mutex);
+}
+/// @}
+
+/*! @brief Avvia una operazione di uscita verso l'hard disk.
+ *  @param d		descrittore dell'hard disk
+ *  @param vetto	buffer che contiene i settori da scrivere
+ *  @param primo	LBA del primo settore da scrivere
+ *  @param quanti	numero di settori da scrivere
+ */
+void starthd_out(des_ata* d, natb vetto[], natl primo, natb quanti)
+{
+	d->cont = quanti;
+	d->punt = vetto + DIM_BLOCK;
+	d->comando = hd::WRITE_SECT;
+	hd::start_cmd(primo, quanti, hd::WRITE_SECT);
+	hd::output_sect(vetto);
+}
+
+/// @addtogroup atasyscall Parti C++/Assembler delle primitive
+/// @{
+
+/*! @brief Parte C++ della primitiva writehd_n().
+ *  @param vetto	buffer che contiene i settori da scrivere
+ *  @param primo	LBA del primo settore da scrivere
+ *  @param quanti	numero di settori da scrivere
+ */
+extern "C" void c_writehd_n(natb vetto[], natl primo, natb quanti)
+{
+	des_ata* d = &hard_disk;
+
+	if (!access(vetto, quanti * DIM_BLOCK, false)) {
+		flog(LOG_WARN, "writehd_n: parametri non validi: %p, %d", vetto, quanti);
+		abort_p();
+	}
+
+	if (!quanti)
+		return;
+
+	sem_wait(d->mutex);
+	starthd_out(d, vetto, primo, quanti);
+	sem_wait(d->sincr);
+	sem_signal(d->mutex);
+}
+/// @}
+
+/*! @brief Avvia una operazione di ingresso in DMA dall'hard disk.
+ *  @param d		descrittore dell'hard disk
+ *  @param vetti	buffer che dovrà ricevere i settori letti
+ *  @param primo	LBA del primo settore da leggere
+ *  @param quanti	numero di settori da leggere
+ */
+void dmastarthd_in(des_ata* d, natb vetti[], natl primo, natb quanti)
+{
+	if (!prepare_prd(d, vetti, quanti)) {
+		flog(LOG_ERR, "dmastarthd_in: numero di PRD insufficiente");
+		sem_signal(d->sincr);
+		return;
+	}
+
+	d->comando = hd::READ_DMA;
+	d->cont = 1;
+	paddr prd = trasforma(d->prd);
+	bm::prepare(prd, false);
+	hd::start_cmd(primo, quanti, hd::READ_DMA);
+	bm::start();
+}
+
+/// @addtogroup atasyscall Parti C++/Assembler delle primitive
+/// @{
+
+/*! @brief Parte C++ della primitiva dmareadhd_n().
+ *  @param vetti	buffer che dovrà ricevere i settori letti
+ *  @param primo	LBA del primo settore da leggere
+ *  @param quanti	numero di settori da leggere
+ */
+extern "C" void c_dmareadhd_n(natb vetti[], natl primo, natb quanti)
+{
+	des_ata* d = &hard_disk;
+
+	if (quanti * DIM_BLOCK > MAX_PRD * DIM_PAGINA) {
+		flog(LOG_WARN, "readhd_n: quanti %d troppo grande", quanti);
+		abort_p();
+	}
+
+	if (!access(vetti, quanti * DIM_BLOCK, true)) {
+		flog(LOG_WARN, "dmareadhd_n: parametri non validi: %p, %d", vetti, quanti);
+		abort_p();
+	}
+
+	if (!quanti)
+		return;
+
+	sem_wait(d->mutex);
+	dmastarthd_in(d, vetti, primo, quanti);
+	sem_wait(d->sincr);
+	sem_signal(d->mutex);
+}
+/// @}
+
+/*! @brief Avvia una operazione di uscita in DMA verso l'hard disk.
+ *  @param d		descrittore dell'hard disk
+ *  @param vetto	buffer che contiene i settori da scrivere
+ *  @param primo	LBA del primo settore da scrivere
+ *  @param quanti	numero di settori da scrivere
+ */
+void dmastarthd_out(des_ata* d, natb vetto[], natl primo, natb quanti)
+{
+	if (!prepare_prd(d, vetto, quanti)) {
+		flog(LOG_ERR, "dmastarthd_out: numero di PRD insufficiente");
+		sem_signal(d->sincr);
+		return;
+	}
+
+	d->comando = hd::WRITE_DMA;
+	d->cont = 1; 				// informazione per il driver
+	paddr prd = trasforma(d->prd);
+	bm::prepare(prd, true);
+	hd::start_cmd(primo, quanti, hd::WRITE_DMA);
+	bm::start();
+}
+
+/// @addtogroup atasyscall Parti C++/Assembler delle primitive
+/// @{
+
+/*! @brief Parte C++ della primitiva dmawritehd_n().
+ *  @param vetto	buffer che contiene i settori da scrivere
+ *  @param primo	LBA del primo settore da scrivere
+ *  @param quanti	numero di settori da scrivere
+ */
+extern "C" void c_dmawritehd_n(natb vetto[], natl primo, natb quanti)
+{
+	des_ata* d = &hard_disk;
+
+	if (quanti * DIM_BLOCK > MAX_PRD * DIM_PAGINA) {
+		flog(LOG_WARN, "readhd_n: quanti %d troppo grande", quanti);
+		abort_p();
+	}
+
+	if (!access(vetto, quanti * DIM_BLOCK, false)) {
+		flog(LOG_WARN, "dmawritehd_n: parametri non validi: %p, %d", vetto, quanti);
+		abort_p();
+	}
+
+	if (!quanti)
+		return;
+
+	sem_wait(d->mutex);
+	dmastarthd_out(d, vetto, primo, quanti);
+	sem_wait(d->sincr);
+	sem_signal(d->mutex);
+}
+/// @}
+
+/// Processo esterno per le richieste di interruzione dell'hard disk
+void estern_hd(natq)
+{
+	des_ata* d = &hard_disk;
+	for(;;) {
+		d->cont--;
+		hd::ack();
+		switch (d->comando) {
+		case hd::READ_SECT:
+			hd::input_sect(d->punt);
+			d->punt += DIM_BLOCK;
+			break;
+		case hd::WRITE_SECT:
+			if (d->cont != 0) {
+				hd::output_sect(d->punt);
+				d->punt += DIM_BLOCK;
+			}
+			break;
+		case hd::READ_DMA:
+		case hd::WRITE_DMA:
+			bm::ack();
+			break;
+		}
+		if (d->cont == 0)
+			sem_signal(d->sincr);
+		wfi();
+	}
+}
+
+/*! @brief Inizializza il sottosistema per la gestione dell'hard disk
+ *  @return		true in caso di successo, false altrimenti
+ */
+bool hd_init()
+{
+	natl id;
+	natb bus = 0, dev = 0, fun = 0;
+	des_ata* d;
+
+	d = &hard_disk;
+
+	if ( (d->mutex = sem_ini(1)) == 0xFFFFFFFF) {
+		flog(LOG_ERR, "hd: impossibile creare mutex");
+		return false;
+	}
+	if ( (d->sincr = sem_ini(0)) == 0xFFFFFFFF) {
+		flog(LOG_ERR, "hd: impossibile creare sincr");
+		return false;
+	}
+
+	if (!bm::find(bus, dev, fun)) {
+		flog(LOG_WARN, "hd: bus master non trovato");
+		return false;
+	}
+
+	if ( (d->prd = new (std::align_val_t{65536}) natl[2 * MAX_PRD]) == nullptr) {
+		flog(LOG_WARN, "hd: impossibile allocare vettore di PRD");
+		return false;
+	}
+
+	flog(LOG_INFO, "bm: %02x:%02x.%1d", bus, dev, fun);
+	bm::init(bus, dev, fun);
+
+	id = activate_pe(estern_hd, 0, MIN_EXT_PRIO + INTR_TIPO_HD, LIV_SISTEMA, HD_IRQ);
+	if (id == 0xFFFFFFFF) {
+		flog(LOG_ERR, "hd: impossibile creare proc. esterno");
+		return false;
+	}
+
+	hd::enable_intr();
+
+	return true;
+}
+/// @}
+
+// ( ESAME 2025-01-27
+
+
+/// Descrittore dei buffer interni delle VCE
+struct vce_des {
+	/// Array circolare di byte
+	char buf[VCE_BUFSIZE];
+	/// indice della testa dell'array circolare
+	natl head;
+	/// indice della coda dell'array circolare
+	natl tail;
+	/// numero di byte contenuti nell'array circolare
+	natl n;
+	/// indice di un semaforo di sincronizzazione
+	natl sync;
+	/// true se il proprietario del VCE sta aspettando su sync
+	bool waiting;
+	/// true se il proprietario del VCE è terminato
+	bool terminated;
+};
+
+/**
+ * @brief Inizializza una VCE.
+ *
+ * @param v	puntatore al descrittore della VCE
+ *
+ * @return 	false in caso di errore
+ */
+bool vce_des_init(vce_des *v)
+{
+	v->head = v->tail = v->n = 0;
+	if ( (v->sync = sem_ini(0)) == 0xFFFFFFFF ) {
+		flog(LOG_WARN, "vce: semafori terminati");
+		return false;
+	}
+	v->waiting = v->terminated = false;
+	return true;
+}
+
+/**
+ * @brief Inserisce un byte nel buffer interno di una VCE.
+ *
+ * @note blocca il processo se il buffer è pieno
+ *
+ * @param v	puntatore al descrittore della VCE
+ * @param c	carattere da inserire
+ * @return	false se il buffer è pieno
+ */
+bool vce_des_write(vce_des *v, char c)
+{
+	while (v->n == VCE_BUFSIZE)
+		return false;
+	v->buf[v->tail] = c;
+	v->tail = (v->tail + 1) % VCE_BUFSIZE;
+	v->n++;
+	return true;
+}
+
+/**
+ * @brief Prova a leggere un byte dal buffer interno di una VCE.
+ *
+ * @param v	puntatore al descrittore della VCE	
+ *
+ * @return 	il carattere letto, o 0xFFFFFFFF se il buffer è vuoto
+ */
+natl vce_des_read(vce_des *v)
+{
+	natl c = 0xFFFFFFFF;
+	if (v->n > 0) {
+		c = v->buf[v->head];
+		v->head = (v->head + 1) % VCE_BUFSIZE;
+		v->n--;
+	}
+	return c;
+}
+
+/**
+ * @brief Ottieni il pid del processo corrente.
+ *
+ * @return pid del processo corrente
+ */
+natl getpid()
+{
+	return getmeminfo().pid;
+}
+
+/// Descrittore di periferica CE.
+struct ce_des {
+	/// Descrittori delle VCE di questa periferica
+	vce_des *vces[MAX_PROC];
+
+	/// True se l'interfaccia non ha ancora terminato l'ultimo trasferimento
+	bool busy;
+
+	/// Registro di scrittura
+	ioaddr iTBR;
+
+	/// Indice di un semaforo di mutua esclusione nell'accesso al ce_des e alla periferica
+	natl mutex;
+};
+
+/// Unica istanza del descrittore ce_des;
+ce_des ce;
+
+/**
+ * @brief Ottiene la prossima VCE da servire
+ *
+ * @param[in,out] current	in: pid dell'ultimo processo servito; out: pid del prossimo processo da servire
+ *
+ * @return	puntatore alla VCE da servire, o nullptr se tutte le VCE sono vuote 
+ */
+vce_des* vce_des_next(natl& current)
+{
+	for (natl i = 0; i < MAX_PROC; i++) {
+		current = (current + 1) % MAX_PROC;
+		vce_des *v = ce.vces[current];
+		if (v && v->n > 0)
+			return v;
+	}
+	return nullptr;
+}
+
+/// Non usare: solo per debug
+extern "C" bool c_vcedbg(natl testid, natl testlen, natb* testdata)
+{
+	outputb(testid, ce.iTBR + 8);
+	natl curlen = inputb(ce.iTBR + 8);
+	if (curlen != testlen) {
+		flog(LOG_WARN, "TEST %u: attesi %u byte, ricevuti %u", testid, testlen, curlen);
+		return false;
+	}
+	for (natl i = 0; i < testlen; i++) {
+		natb curb = inputb(ce.iTBR + 12);
+		natb testb = testid * 16 + testdata[i];
+		if (curb != testb) {
+			flog(LOG_WARN, "TEST %u, byte %u: atteso %02x, ricevuto %02x",
+					testid, i, testb, curb);
+			return false;
+		}
+	}
+	return true;
+}
+
+/// Parte C++ della primitiva vcenew()
+extern "C" bool c_vcenew()
+{
+/// @todo Scrivere il corpo della primitiva vcenew()
+// ( SOLUZIONE 2025-01-27
+	// controlli
+	natl pid = getpid();
+	if(ce.vces[pid]) {
+		flog(LOG_WARN, "vcenew: il processo ha già una VCE");
+		abort_p();
+	}
+
+	// tutto ok, crea il descrittore VCE
+	vce_des* n_vce = new vce_des;
+	if(!vce_des_init(n_vce)) {
+		flog(LOG_WARN, "vcenew: impossibile inizializzare la VCE");
+		return false;
+	}
+
+	// inserisci questa VCE nell'array di VCE
+	ce.vces[pid] = n_vce;
+	
+	return true;
+//   SOLUZIONE 2025-01-27 )
+}
+
+/// Parte C++ della primitiva vcewrite()
+extern "C" void c_vcewrite(char c)
+{
+	natl pid = getpid();
+	sem_wait(ce.mutex);
+	vce_des *v = ce.vces[pid];
+	if (!v) {
+		flog(LOG_WARN, "vcewrite: il processo non ha una VCE");
+		sem_signal(ce.mutex);
+		abort_p();
+	}
+	// possiamo proseguire se la periferica è libera o se c'è posto nella VCE,
+	// altrimenti dobbiamo bloccare il processo e riprovare
+	while (ce.busy && v->n == VCE_BUFSIZE) {
+		v->waiting = true;
+		// liberiamo il des_ce per permettere ad altri di usarlo
+		sem_signal(ce.mutex);
+		// blocchiamo il processo
+		sem_wait(v->sync);
+		// qualcuno ci ha svegliati: riacquisiamo la mutua esclusione
+		// e vediamo se ora è possibile proseguire
+		sem_wait(ce.mutex);
+	}
+	if (!ce.busy) {
+		// se non ci sono trasferimenti in corso, inviamo il byte
+		// direttamente
+		outputb(c, ce.iTBR);
+		ce.busy = true;
+	} else {
+		vce_des_write(v, c);
+	}
+	sem_signal(ce.mutex);
+}
+
+/// Processo esterno associato alla periferica CE
+extern "C" void estern_ce(natq)
+{
+/// @todo Scrivere il corpo del processo esterno
+// ( SOLUZIONE 2025-01-27
+	natl proc = 0;
+
+	for(;;) {
+		// qui l'idea è che dobbiamo:
+		// 1) controllare evget.
+		// 	-	se è un interruzione esterna, inoltra il prossimo byte;
+		// 	- se un processo abortito, elimina la vce corrispondente
+		natl pid = evget();
+
+		if(pid) { // un processo è stato abortito
+			// ottieni la sua VCE
+			vce_des* p_vce = ce.vces[pid];
+
+			if(p_vce) {
+				p_vce->terminated = true;
+				if(!p_vce->n) {
+					// eliminala
+					delete p_vce;
+					p_vce = nullptr;
+				}
+			}
+		} else { // è una normale interruzione esterna
+			// ottieni la VCE del processo corrente
+			vce_des* n_vce = ce.vces[proc];
+
+			// se il processo corrente si era messo in attesa, sveglialo
+			if(n_vce && n_vce->waiting) {
+				n_vce->waiting = false;
+				sem_signal(n_vce->sync);
+			} else {
+				// ottieni la prossima VCE da servire
+				n_vce = vce_des_next(proc);			
+			} 
+			
+			if(!n_vce) { // abbiamo finito
+				ce.busy = false;
+			} else { // c'è da inviare un altra richiesta
+				char c = vce_des_read(n_vce); 
+				outputb(c, ce.iTBR);
+
+				if(n_vce->terminated && !n_vce->n) {
+					// eliminala
+					delete n_vce;
+					n_vce = nullptr;
+				}
+			}
+		}
+
+		wfi(); // questa salta se ci sono altre notifiche
+	}
+//   SOLUZIONE 2025-01-27 )
+}
+
+/**
+ * @brief Inizializza il sottosistema di gestione delle periferiche CE e VCE.
+ *
+ * Trova la periferica e inizializza il descrittore ce_des.
+ *
+ * @return 	false in caso di errore, true altrimenti
+ */
+bool ce_init()
+{
+	bool found = false;
+	for (natb bus = 0, dev = 0, fun = 0;
+	     pci::find_dev(bus, dev, fun, 0xedce, 0x1234);
+	     pci::next(bus, dev, fun))
+	{
+		if (found) {
+			flog(LOG_WARN, "troppi dispositivi ce");
+			break;
+		}
+		found = true;
+		natw base = pci::read_confl(bus, dev, fun, 0x10);
+		natb irq = pci::read_confb(bus, dev, fun, 0x3c);
+		base &= ~0x1;
+		ce.iTBR = base;
+		flog(LOG_INFO, "ce: %02x:%02x.%1x base=%04x IRQ=%u",
+				bus, dev, fun, base, irq);
+
+		ce.mutex = sem_ini(1);
+		if (ce.mutex == 0xFFFFFFFF) {
+			flog(LOG_ERR, "semafori insufficienti");
+			return false;
+		}
+		ce.busy = false;
+		for (natl i = 0; i < MAX_PROC; i++) {
+			ce.vces[i] = nullptr;
+		}
+		if (activate_pe(estern_ce, 0, MIN_EXT_PRIO + INTR_TIPO_CE, LIV_SISTEMA, irq, true) == 0xFFFFFFFF) {
+			flog(LOG_ERR, "impossibile attivare processo esterno");
+			return false;
+		}
+	}
+	return true;
+}
+//   ESAME 2025-01-27 )
+////////////////////////////////////////////////////////////////////////////////
+/// @addtogroup ioinit		Inizializzazione
+/// @{
+////////////////////////////////////////////////////////////////////////////////
+
+/// Ultimo indirizzo utilizzato dal modulo I/O (fornito dal collegatore)
+extern "C" char _end[];
+
+/*! @brief Riempie i gate della IDT relativi alle primitive fornite dal modulo I/O
+ *  @return		true in caso di successo, false altrimenti
+ */
+extern "C" bool fill_io_gates();
+
+/*! @brief Corpo del processo main I/O.
+ *
+ *  Il modulo sistema crea il processo main I/O all'avvio e gli cede
+ *  il controllo, passandogli l'indirizzo di una variabile intera.
+ *  Il modulo I/O deve scrivere 1 in questa variabile quando ha
+ *  ha terminato la fase di inizializzazione.
+ *
+ *  @param p		indirizzo della variabile di sincronizzazione
+ */
+extern "C" void main_io(natq p)
+{
+	int *p_io_init_done = ptr_cast<int>(p);
+
+	fill_io_gates();
+	ioheap_mutex = sem_ini(1);
+	if (ioheap_mutex == 0xFFFFFFFF) {
+		flog(LOG_ERR, "impossible creare semaforo ioheap_mutex");
+		abort_p();
+	}
+	char* end_ = allinea_ptr(_end, DIM_PAGINA);
+	heap_init(end_, DIM_IO_HEAP);
+	flog(LOG_INFO, "Heap del modulo I/O: %llxB [%p, %p)", DIM_IO_HEAP,
+			end_, end_ + DIM_IO_HEAP);
+	flog(LOG_INFO, "Inizializzo la console (kbd + vid)");
+	if (!console_init()) {
+		flog(LOG_ERR, "inizializzazione console fallita");
+		abort_p();
+	}
+	flog(LOG_INFO, "Inizializzo la gestione dell'hard disk");
+	if (!hd_init()) {
+		flog(LOG_ERR, "inizializzazione hard disk fallita");
+		abort_p();
+	}
+// [ ESAME 2025-01-27
+	if (!ce_init()) {
+		flog(LOG_WARN, "inizializzazione ce fallita");
+		abort_p();
+	}
+//   ESAME 2025-01-27 ]
+	*p_io_init_done = 1;
+	terminate_p();
+}
+/// @}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @addtogroup iodbg		Supporto per il debugging
+/// @brief Funzioni che forniscono informazioni sullo stato del sistema
+/// @{
+////////////////////////////////////////////////////////////////////////////////
+
+/*! @brief Parte C++ della primitiva getiomeminfo()
+ *  @return		byte liberi nello heap I/O
+ */
+extern "C" natq c_getiomeminfo()
+{
+	natq rv;
+	sem_wait(ioheap_mutex);
+	rv = disponibile();
+	sem_signal(ioheap_mutex);
+	return rv;
+}
+/// @}
+/// @}
